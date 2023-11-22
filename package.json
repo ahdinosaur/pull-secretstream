@@ -4,8 +4,11 @@
   "description": "libsodium secretstream as a pull stream",
   "main": "src/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test"
   },
+  "files": [
+    "src/**.js"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ahdinosaur/pull-secretstream.git"
