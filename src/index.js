@@ -7,41 +7,41 @@ const pullHeader = require('pull-header')
 
 module.exports = {
   KEYBYTES,
-  createBoxStream,
-  createUnboxStream,
+  createEncryptStream,
+  createDecryptStream,
 }
 
-function createBoxStream(key) {
-  const boxer = new Push(key)
+function createEncryptStream(key) {
+  const encrypter = new Push(key)
 
-  const sendHeader = pull.values([boxer.header])
+  const sendHeader = pull.values([encrypter.header])
 
-  const boxMap = pullMapLast(
+  const encryptMap = pullMapLast(
     (plaintext) => {
-      return boxer.next(plaintext)
+      return encrypter.next(plaintext)
     },
     () => {
-      return boxer.final()
+      return encrypter.final()
     },
   )
 
   return (stream) => {
-    return pullCat([sendHeader, pull(stream, boxMap)])
+    return pullCat([sendHeader, pull(stream, encryptMap)])
   }
 }
 
-function createUnboxStream(key) {
-  const unboxer = new Pull(key)
+function createDecryptStream(key) {
+  const decrypter = new Pull(key)
 
   const receiveHeader = pullHeader(HEADERBYTES, (header) => {
-    unboxer.init(header)
+    decrypter.init(header)
   })
 
-  const unboxMap = pullMap((ciphertext) => {
-    return unboxer.next(ciphertext)
+  const decryptMap = pullMap((ciphertext) => {
+    return decrypter.next(ciphertext)
   })
 
   return (stream) => {
-    return pull(stream, receiveHeader, unboxMap)
+    return pull(stream, receiveHeader, decryptMap)
   }
 }

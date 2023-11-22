@@ -7,7 +7,7 @@ replacement for [`pull-box-stream`](https://github.com/dominictarr/pull-box-stre
 ```js
 const { randomBytes } = require('crypto')
 const pull = require('pull-stream')
-const { KEYBYTES, createBoxStream, createUnboxStream } = require('pull-secretstream')
+const { KEYBYTES, createEncryptStream, createDecryptStream } = require('pull-secretstream')
 
 // generate a random secret, `KEYBYTES` bytes long.
 const key = randomBytes(KEYBYTES)
@@ -18,7 +18,7 @@ pull(
   pull.values([plaintext1]),
 
   // encrypt every byte
-  createBoxStream(key),
+  createEncryptStream(key),
 
   // the encrypted stream
   pull.through((ciphertext) => {
@@ -26,7 +26,7 @@ pull(
   }),
 
   //decrypt every byte
-  createUnboxStream(key),
+  createDecryptStream(key),
 
   pull.concat((err, plaintext2) => {
     if (err) throw err

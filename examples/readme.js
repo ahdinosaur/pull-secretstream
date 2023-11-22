@@ -1,6 +1,6 @@
 const { randomBytes } = require('crypto')
 const pull = require('pull-stream')
-const { KEYBYTES, createBoxStream, createUnboxStream } = require('../')
+const { KEYBYTES, createEncryptStream, createDecryptStream } = require('../')
 
 // generate a random secret, `KEYBYTES` bytes long.
 const key = randomBytes(KEYBYTES)
@@ -11,7 +11,7 @@ pull(
   pull.values([plaintext1]),
 
   // encrypt every byte
-  createBoxStream(key),
+  createEncryptStream(key),
 
   // the encrypted stream
   pull.through((ciphertext) => {
@@ -19,7 +19,7 @@ pull(
   }),
 
   //decrypt every byte
-  createUnboxStream(key),
+  createDecryptStream(key),
 
   pull.concat((err, plaintext2) => {
     if (err) throw err
