@@ -1,9 +1,9 @@
 const { KEYBYTES, HEADERBYTES, Push, Pull } = require('sodium-secretstream')
 const pull = require('pull-stream/pull')
-const pullMap = require('pull-stream/throughs/map')
 const pullCat = require('pull-cat')
 const pullMapLast = require('pull-map-last')
 const pullHeader = require('pull-header')
+const pullThrough = require('pull-through')
 
 module.exports = {
   KEYBYTES,
@@ -45,9 +45,23 @@ function createDecryptStream(key) {
     decrypter.init(header)
   })
 
-  const decryptMap = pullMap((ciphertext) => {
-    return decrypter.next(ciphertext)
-  })
+  const decryptMap = pullThrough(
+    function decryptThroughData(ciphertext) {
+      this.queue(decrypter.next(ciphertext))
+      if (decrypter.final) {
+        this.emit('end')
+      }
+    },
+    function decryptThroughEnd() {
+      if (!decrypter.final) {
+        this.emit(
+          'error',
+          new Error('pull-secretstream/decryptStream: stream ended before final tag'),
+        )
+      }
+      // otherwise the stream should have already been ended.
+    },
+  )
 
   return (stream) => {
     return pull(stream, receiveHeader, decryptMap)
