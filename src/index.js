@@ -55,6 +55,26 @@ class EncryptStream extends Pipeable {
           this.sink.write(header)
         }
 
+        while (this.plaintextBufferList.length >= this.plaintextBlockSize) {
+          const plaintextBlock = this.plaintextBufferList.slice(0, this.plaintextBlockSize)
+          this.plaintextBufferList.consume(this.plaintextBlockSize)
+          debug('%h : encrypting block %h', this.debugKey, plaintextBlock)
+          const ciphertext = this.encrypter.next(plaintextBlock)
+          debug('%h : encrypted ciphertext %h', this.debugKey, ciphertext)
+          this.sink.write(ciphertext)
+        }
+
+        if (this.plaintextBufferList.length > 0) {
+          const plaintextBlock = Buffer.alloc(this.plaintextBlockSize)
+          this.plaintextBufferList.copy(plaintextBlock, 0, 0, this.plaintextBufferList.length)
+          this.plaintextBufferList.consume(this.plaintextBufferList.length)
+          sodium_pad(plaintextBlock, plaintextBlock.byteLength, this.plaintextBlockSize)
+          debug('%h : encrypting padded block %h', this.debugKey, plaintextBlock)
+          const ciphertext = this.encrypter.next(plaintextBlock)
+          debug('%h : encrypted ciphertext %h', this.debugKey, ciphertext)
+          this.sink.write(ciphertext)
+        }
+
         this.source.resume()
       }
     }
@@ -63,11 +83,15 @@ class EncryptStream extends Pipeable {
   end(err) {
     this.ended = err || true
 
+    if (err && err !== true && this.sink) {
+      return this.sink.end(err)
+    }
+
+    this.resume()
+
     const final = this.encrypter.final()
     debug('%h : encrypter final %h', this.debugKey, final)
     this.sink.write(final)
-
-    return this.sink.end(err)
   }
 
   abort(err) {
@@ -83,24 +107,8 @@ class EncryptStream extends Pipeable {
 
     this.plaintextBufferList.append(plaintext)
 
-    while (this.plaintextBufferList.length >= this.plaintextBlockSize) {
-      const plaintextBlock = this.plaintextBufferList.slice(0, this.plaintextBlockSize)
-      this.plaintextBufferList.consume(this.plaintextBlockSize)
-      debug('%h : encrypting block %h', this.debugKey, plaintextBlock)
-      const ciphertext = this.encrypter.next(plaintextBlock)
-      debug('%h : encrypted ciphertext %h', this.debugKey, ciphertext)
-      this.sink.write(ciphertext)
-    }
-
-    if (this.plaintextBufferList.length > 0) {
-      const plaintextBlock = Buffer.alloc(this.plaintextBlockSize)
-      this.plaintextBufferList.copy(plaintextBlock, 0, 0, this.plaintextBufferList.length)
-      this.plaintextBufferList.consume(this.plaintextBufferList.length)
-      sodium_pad(plaintextBlock, plaintextBlock.byteLength, this.plaintextBlockSize)
-      debug('%h : encrypting padded block %h', this.debugKey, plaintextBlock)
-      const ciphertext = this.encrypter.next(plaintextBlock)
-      debug('%h : encrypted ciphertext %h', this.debugKey, ciphertext)
-      this.sink.write(ciphertext)
+    if (this.sink && !this.sink.paused) {
+      this.resume()
     }
   }
 }
@@ -134,7 +142,33 @@ class DecryptStream extends Pipeable {
       this.paused = this.sink.paused
 
       if (!this.paused) {
-        this.source.resume()
+        if (!this.hasReceivedHeader) {
+          if (this.ciphertextBufferList.length >= HEADER_SIZE) {
+            const header = this.ciphertextBufferList.slice(0, HEADER_SIZE)
+            this.ciphertextBufferList.consume(HEADER_SIZE)
+            this.decrypter.init(header)
+            this.hasReceivedHeader = true
+          } else {
+            return
+          }
+        }
+
+        while (this.ciphertextBufferList.length >= this.ciphertextBlockSize) {
+          const ciphertextBlock = this.ciphertextBufferList.slice(0, this.ciphertextBlockSize)
+          this.ciphertextBufferList.consume(this.ciphertextBlockSize)
+          debug('%h : decrypting block %h', this.debugKey, ciphertextBlock)
+          const plaintext = this.decrypter.next(ciphertextBlock)
+          debug('%h : decrypted plaintext %h', this.debugKey, plaintext)
+          this.sink.write(plaintext)
+
+          if (this.decrypter.final) {
+            debug('%h : decrypter final', this.debugKey)
+            this.end()
+            break
+          }
+
+          this.source.resume()
+        }
       }
     }
   }
@@ -142,9 +176,11 @@ class DecryptStream extends Pipeable {
   end(err) {
     this.ended = err || true
 
-    if (err) {
+    if (err && err !== true && this.sink) {
       return this.sink.end(err)
     }
+
+    this.resume()
 
     if (!this.decrypter.final) {
       this.sink.end(new Error('pull-secretstream/decryptStream: stream ended before final tag'))
@@ -166,30 +202,8 @@ class DecryptStream extends Pipeable {
 
     this.ciphertextBufferList.append(ciphertext)
 
-    if (!this.hasReceivedHeader) {
-      if (this.ciphertextBufferList.length >= HEADER_SIZE) {
-        const header = this.ciphertextBufferList.slice(0, HEADER_SIZE)
-        this.ciphertextBufferList.consume(HEADER_SIZE)
-        this.decrypter.init(header)
-        this.hasReceivedHeader = true
-      } else {
-        return
-      }
-    }
-
-    while (this.ciphertextBufferList.length >= this.ciphertextBlockSize) {
-      const ciphertextBlock = this.ciphertextBufferList.slice(0, this.ciphertextBlockSize)
-      this.ciphertextBufferList.consume(this.ciphertextBlockSize)
-      debug('%h : decrypting block %h', this.debugKey, ciphertextBlock)
-      const plaintext = this.decrypter.next(ciphertextBlock)
-      debug('%h : decrypted plaintext %h', this.debugKey, plaintext)
-      this.sink.write(plaintext)
-
-      if (this.decrypter.final) {
-        debug('%h : decrypter final', this.debugKey)
-        this.end()
-        break
-      }
+    if (this.sink && !this.sink.paused) {
+      this.resume()
     }
   }
 }
