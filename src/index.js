@@ -16,7 +16,8 @@ createDebug.formatters.h = (v) => {
 const debug = createDebug('pull-secretstream')
 
 module.exports = {
-  KEYBYTES,
+  KEY_SIZE: KEYBYTES,
+  DEFAULT_BLOCK_SIZE,
   createEncryptStream,
   createDecryptStream,
   getPlaintextBlockSize,
@@ -55,6 +56,7 @@ function createEncryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
     function encryptThroughData(plaintext) {
       plaintextBufferList.append(plaintext)
 
+      // while we still have enough bytes to send full blocks
       while (plaintextBufferList.length >= plaintextBlockSize) {
         const plaintextBlock = plaintextBufferList.slice(0, plaintextBlockSize)
         plaintextBufferList.consume(plaintextBlockSize)
@@ -64,6 +66,7 @@ function createEncryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
         this.queue(ciphertext)
       }
 
+      // send the remaining as a padded block
       if (plaintextBufferList.length > 0) {
         const plaintextLength = plaintextBufferList.length
         const plaintextBlock = Buffer.alloc(plaintextBlockSize)
@@ -77,6 +80,7 @@ function createEncryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
       }
     },
     function encryptThroughEnd() {
+      // send a block full of zeros with the final marker
       const finalBlock = Buffer.alloc(plaintextBlockSize)
       sodium_pad(finalBlock, 0, plaintextBlockSize)
       const final = encrypter.final(finalBlock, Buffer.allocUnsafe(plaintextBlockSize + ABYTES))
@@ -110,6 +114,7 @@ function createDecryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
     function decryptThroughData(ciphertext) {
       ciphertextBufferList.append(ciphertext)
 
+      // while we still have enough bytes for full blocks
       while (ciphertextBufferList.length >= ciphertextBlockSize) {
         const ciphertextBlock = ciphertextBufferList.slice(0, ciphertextBlockSize)
         ciphertextBufferList.consume(ciphertextBlockSize)
@@ -133,14 +138,12 @@ function createDecryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
       }
     },
     function decryptThroughEnd() {
-      /*
       if (!decrypter.final) {
         this.emit(
           'error',
           new Error('pull-secretstream/decryptStream: stream ended before final tag'),
         )
       }
-      */
       // otherwise the stream should have already been ended.
     },
   )
