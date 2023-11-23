@@ -2,11 +2,11 @@ const test = require('node:test')
 const assert = require('node:assert')
 const pull = require('pull-stream')
 const { randomBytes } = require('crypto')
-const { KEYBYTES, createEncryptStream, createDecryptStream } = require('../')
+const { KEY_SIZE, createEncryptStream, createDecryptStream } = require('../')
 
 test('test basic encryptStream and decryptStream', async (t) => {
   // generate a random secret, `KEYBYTES` bytes long.
-  const key = randomBytes(KEYBYTES)
+  const key = randomBytes(KEY_SIZE)
 
   const plaintext1 = Buffer.from('hello world')
 

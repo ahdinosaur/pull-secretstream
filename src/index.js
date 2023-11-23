@@ -1,9 +1,17 @@
-const { KEYBYTES, HEADERBYTES, Push, Pull } = require('sodium-secretstream')
-const pull = require('pull-stream/pull')
-const pullCat = require('pull-cat')
-const pullHeader = require('pull-header')
-const pullThrough = require('pull-through')
+const { sodium_pad, sodium_unpad } = require('sodium-universal')
+const {
+  KEYBYTES: KEY_SIZE,
+  HEADERBYTES: HEADER_SIZE,
+  ABYTES: A_SIZE,
+  Push,
+  Pull,
+} = require('sodium-secretstream')
+const pushStreamToPullStream = require('push-stream-to-pull-stream')
 const createDebug = require('debug')
+const Pipeable = require('push-stream/pipeable')
+const { BufferList } = require('bl')
+
+const DEFAULT_BLOCK_SIZE = 512 // bytes
 
 createDebug.formatters.h = (v) => {
   return v.toString('hex')
@@ -11,91 +19,190 @@ createDebug.formatters.h = (v) => {
 
 const debug = createDebug('pull-secretstream')
 
-module.exports = {
-  KEYBYTES,
-  createEncryptStream,
-  createDecryptStream,
+function plaintextBlockSize(ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
+  return ciphertextBlockSize - A_SIZE
 }
 
-function createEncryptStream(key) {
-  if (key.length !== KEYBYTES) {
-    throw new Error(`pull-secretstream/createEncryptStream: key must be byte length of ${KEYBYTES}`)
+class EncryptStream extends Pipeable {
+  constructor(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
+    super()
+
+    if (key.length !== KEY_SIZE) {
+      throw new Error(`pull-secretstream/EncryptStream: key must be byte length of ${KEY_SIZE}`)
+    }
+
+    this.paused = true
+    this.ended = false
+    this.source = this.sink = null
+
+    this.debugKey = key.slice(0, 2)
+    this.encrypter = new Push(key)
+    this.hasSentHeader = false
+
+    this.plaintextBlockSize = plaintextBlockSize(ciphertextBlockSize)
+    this.plaintextBufferList = new BufferList()
   }
-  const debugKey = key.slice(0, 2)
 
-  const encrypter = new Push(key)
+  resume() {
+    if (this.source && this.sink) {
+      this.paused = this.sink.paused
 
-  const sendHeader = () => {
-    let hasSentHeader = false
-    return (end, cb) => {
-      if (end) cb(end)
-      else if (!hasSentHeader) {
-        const header = encrypter.header
-        debug('%h : encrypter sending header %h', debugKey, header)
-        hasSentHeader = true
-        cb(null, header)
-      } else {
-        cb(true)
+      if (!this.paused) {
+        if (!this.hasSentHeader) {
+          const header = this.encrypter.header
+          debug('%h : encrypter sending header %h', this.debugKey, header)
+          this.hasSentHeader = true
+          this.sink.write(header)
+        }
+
+        this.source.resume()
       }
     }
   }
 
-  const encryptMap = pullThrough(
-    function encryptThroughData(plaintext) {
-      debug('%h : encrypting plaintext %h', debugKey, plaintext)
-      const ciphertext = encrypter.next(plaintext)
-      debug('%h : encrypted ciphertext %h', debugKey, ciphertext)
-      this.queue(ciphertext)
-    },
-    function encryptThroughEnd() {
-      const final = encrypter.final()
-      debug('%h : encrypter final %h', debugKey, final)
-      this.queue(final)
-      this.queue(null)
-    },
-  )
+  end(err) {
+    this.ended = err || true
 
-  return (stream) => {
-    return pullCat([sendHeader(), pull(stream, encryptMap)])
+    const final = this.encrypter.final()
+    debug('%h : encrypter final %h', this.debugKey, final)
+    this.sink.write(final)
+
+    return this.sink.end(err)
+  }
+
+  abort(err) {
+    this.ended = err
+    return this.source.abort(err)
+  }
+
+  write(plaintext) {
+    if (!Buffer.isBuffer(plaintext)) {
+      throw new Error('pull-secretstream/EncryptStream: plaintext must be buffer')
+    }
+    debug('%h : plaintext %h', this.debugKey, plaintext)
+
+    this.plaintextBufferList.append(plaintext)
+
+    while (this.plaintextBufferList.length >= this.plaintextBlockSize) {
+      const plaintextBlock = this.plaintextBufferList.slice(0, this.plaintextBlockSize)
+      this.plaintextBufferList.consume(this.plaintextBlockSize)
+      debug('%h : encrypting block %h', this.debugKey, plaintextBlock)
+      const ciphertext = this.encrypter.next(plaintextBlock)
+      debug('%h : encrypted ciphertext %h', this.debugKey, ciphertext)
+      this.sink.write(ciphertext)
+    }
+
+    if (this.plaintextBufferList.length > 0) {
+      const plaintextBlock = Buffer.alloc(this.plaintextBlockSize)
+      this.plaintextBufferList.copy(plaintextBlock, 0, 0, this.plaintextBufferList.length)
+      this.plaintextBufferList.consume(this.plaintextBufferList.length)
+      sodium_pad(plaintextBlock, plaintextBlock.byteLength, this.plaintextBlockSize)
+      debug('%h : encrypting padded block %h', this.debugKey, plaintextBlock)
+      const ciphertext = this.encrypter.next(plaintextBlock)
+      debug('%h : encrypted ciphertext %h', this.debugKey, ciphertext)
+      this.sink.write(ciphertext)
+    }
   }
 }
 
-function createDecryptStream(key) {
-  if (key.length !== KEYBYTES) {
-    throw new Error(`pull-secretstream/createDecryptStream: key must be byte length of ${KEYBYTES}`)
+function createEncryptStream(key, blockSize = DEFAULT_BLOCK_SIZE) {
+  return pushStreamToPullStream.transform(new EncryptStream(key, blockSize))
+}
+
+class DecryptStream extends Pipeable {
+  constructor(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
+    super()
+
+    if (key.length !== KEY_SIZE) {
+      throw new Error(`pull-secretstream/DecryptStream: key must be byte length of ${KEY_SIZE}`)
+    }
+
+    this.paused = true
+    this.ended = false
+    this.source = this.sink = null
+
+    this.debugKey = key.slice(0, 2)
+    this.decrypter = new Pull(key)
+    this.hasReceivedHeader = false
+
+    this.ciphertextBlockSize = ciphertextBlockSize
+    this.ciphertextBufferList = new BufferList()
   }
-  const debugKey = key.slice(0, 2)
 
-  const decrypter = new Pull(key)
+  resume() {
+    if (this.source && this.sink) {
+      this.paused = this.sink.paused
 
-  const receiveHeader = pullHeader(HEADERBYTES, (header) => {
-    debug('%h : decrypter receiving header %h', debugKey, header)
-    decrypter.init(header)
-  })
-
-  const decryptMap = pullThrough(
-    function decryptThroughData(ciphertext) {
-      debug('%h : decrypting ciphertext %h', debugKey, ciphertext)
-      const plaintext = decrypter.next(ciphertext)
-      debug('%h : decrypted ciphertext %h', debugKey, plaintext)
-      this.queue(plaintext)
-      if (decrypter.final) {
-        debug('%h : decrypter final', debugKey)
-        this.emit('end')
+      if (!this.paused) {
+        this.source.resume()
       }
-    },
-    function decryptThroughEnd() {
-      if (!decrypter.final) {
-        this.emit(
-          'error',
-          new Error('pull-secretstream/decryptStream: stream ended before final tag'),
-        )
-      }
-      // otherwise the stream should have already been ended.
-    },
-  )
-
-  return (stream) => {
-    return pull(stream, receiveHeader, decryptMap)
+    }
   }
+
+  end(err) {
+    this.ended = err || true
+
+    if (err) {
+      return this.sink.end(err)
+    }
+
+    if (!this.decrypter.final) {
+      this.sink.end(new Error('pull-secretstream/decryptStream: stream ended before final tag'))
+    } else {
+      this.sink.end()
+    }
+  }
+
+  abort(err) {
+    this.ended = err
+    return this.source.abort(err)
+  }
+
+  write(ciphertext) {
+    if (!Buffer.isBuffer(ciphertext)) {
+      throw new Error('pull-secretstream/DecryptStream: ciphertext must be buffer')
+    }
+    debug('%h : ciphertext %h', this.debugKey, ciphertext)
+
+    this.ciphertextBufferList.append(ciphertext)
+
+    if (!this.hasReceivedHeader) {
+      if (this.ciphertextBufferList.length >= HEADER_SIZE) {
+        const header = this.ciphertextBufferList.slice(0, HEADER_SIZE)
+        this.ciphertextBufferList.consume(HEADER_SIZE)
+        this.decrypter.init(header)
+        this.hasReceivedHeader = true
+      } else {
+        return
+      }
+    }
+
+    while (this.ciphertextBufferList.length >= this.ciphertextBlockSize) {
+      const ciphertextBlock = this.ciphertextBufferList.slice(0, this.ciphertextBlockSize)
+      this.ciphertextBufferList.consume(this.ciphertextBlockSize)
+      debug('%h : decrypting block %h', this.debugKey, ciphertextBlock)
+      const plaintext = this.decrypter.next(ciphertextBlock)
+      debug('%h : decrypted plaintext %h', this.debugKey, plaintext)
+      this.sink.write(plaintext)
+
+      if (this.decrypter.final) {
+        debug('%h : decrypter final', this.debugKey)
+        this.end()
+        break
+      }
+    }
+  }
+}
+
+function createDecryptStream(key, blockSize = DEFAULT_BLOCK_SIZE) {
+  return pushStreamToPullStream.transform(new DecryptStream(key, blockSize))
+}
+
+module.exports = {
+  DEFAULT_BLOCK_SIZE,
+  KEY_SIZE,
+  createEncryptStream,
+  EncryptStream,
+  createDecryptStream,
+  DecryptStream,
 }

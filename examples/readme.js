@@ -1,9 +1,9 @@
 const { randomBytes } = require('crypto')
 const pull = require('pull-stream')
-const { KEYBYTES, createEncryptStream, createDecryptStream } = require('../')
+const { KEY_SIZE, createEncryptStream, createDecryptStream } = require('../')
 
 // generate a random secret, `KEYBYTES` bytes long.
-const key = randomBytes(KEYBYTES)
+const key = randomBytes(KEY_SIZE)
 
 const plaintext1 = Buffer.from('hello world')
 
