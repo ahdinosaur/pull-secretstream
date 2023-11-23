@@ -134,7 +134,6 @@ function createDecryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
 
         if (decrypter.final) {
           debug('%h : decrypter final', debugKey)
-          this.emit('end')
           break
         }
       }
@@ -146,7 +145,7 @@ function createDecryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
           new Error('pull-secretstream/decryptStream: stream ended before final tag'),
         )
       }
-      // otherwise the stream should have already been ended.
+      this.queue(null)
     },
   )
 
