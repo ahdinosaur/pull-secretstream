@@ -128,7 +128,9 @@ function createDecryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
         )
         const plaintext = plaintextBlock.slice(0, plaintextLength)
         debug('%h : unpadded plaintext %h', debugKey, plaintext)
-        this.queue(plaintext)
+        if (plaintext.byteLength > 0) {
+          this.queue(plaintext)
+        }
 
         if (decrypter.final) {
           debug('%h : decrypter final', debugKey)
