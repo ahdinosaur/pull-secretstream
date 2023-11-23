@@ -27,6 +27,7 @@
   },
   "homepage": "https://github.com/ahdinosaur/pull-secretstream#readme",
   "dependencies": {
+    "debug": "^4.3.4",
     "pull-cat": "^1.1.11",
     "pull-header": "^0.0.0",
     "pull-map-last": "^1.0.0",
