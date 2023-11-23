@@ -1,9 +1,13 @@
-const { KEYBYTES, HEADERBYTES, Push, Pull } = require('sodium-secretstream')
+const { KEYBYTES, HEADERBYTES, ABYTES, Push, Pull } = require('sodium-secretstream')
+const { BufferList } = require('bl')
 const pull = require('pull-stream/pull')
 const pullCat = require('pull-cat')
 const pullHeader = require('pull-header')
 const pullThrough = require('pull-through')
 const createDebug = require('debug')
+const { sodium_pad, sodium_unpad } = require('sodium-universal')
+
+const DEFAULT_BLOCK_SIZE = 512 // bytes
 
 createDebug.formatters.h = (v) => {
   return v.toString('hex')
@@ -12,18 +16,26 @@ createDebug.formatters.h = (v) => {
 const debug = createDebug('pull-secretstream')
 
 module.exports = {
-  KEYBYTES,
+  KEY_SIZE: KEYBYTES,
+  DEFAULT_BLOCK_SIZE,
   createEncryptStream,
   createDecryptStream,
+  getPlaintextBlockSize,
 }
 
-function createEncryptStream(key) {
+function getPlaintextBlockSize(ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
+  return ciphertextBlockSize - ABYTES
+}
+
+function createEncryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
   if (key.length !== KEYBYTES) {
     throw new Error(`pull-secretstream/createEncryptStream: key must be byte length of ${KEYBYTES}`)
   }
-  const debugKey = key.slice(0, 2)
 
+  const debugKey = key.slice(0, 2)
   const encrypter = new Push(key)
+  const plaintextBlockSize = getPlaintextBlockSize(ciphertextBlockSize)
+  const plaintextBufferList = new BufferList()
 
   const sendHeader = () => {
     let hasSentHeader = false
@@ -42,13 +54,36 @@ function createEncryptStream(key) {
 
   const encryptMap = pullThrough(
     function encryptThroughData(plaintext) {
-      debug('%h : encrypting plaintext %h', debugKey, plaintext)
-      const ciphertext = encrypter.next(plaintext)
-      debug('%h : encrypted ciphertext %h', debugKey, ciphertext)
-      this.queue(ciphertext)
+      plaintextBufferList.append(plaintext)
+
+      // while we still have enough bytes to send full blocks
+      while (plaintextBufferList.length >= plaintextBlockSize) {
+        const plaintextBlock = plaintextBufferList.slice(0, plaintextBlockSize)
+        plaintextBufferList.consume(plaintextBlockSize)
+        debug('%h : encrypting block %h', debugKey, plaintextBlock)
+        const ciphertext = encrypter.next(plaintextBlock)
+        debug('%h : encrypted ciphertext %h', debugKey, ciphertext)
+        this.queue(ciphertext)
+      }
+
+      // send the remaining as a padded block
+      if (plaintextBufferList.length > 0) {
+        const plaintextLength = plaintextBufferList.length
+        const plaintextBlock = Buffer.alloc(plaintextBlockSize)
+        plaintextBufferList.copy(plaintextBlock, 0, 0, plaintextLength)
+        plaintextBufferList.consume(plaintextLength)
+        sodium_pad(plaintextBlock, plaintextLength, plaintextBlockSize)
+        debug('%h : encrypting padded block %h', debugKey, plaintextBlock)
+        const ciphertext = encrypter.next(plaintextBlock)
+        debug('%h : encrypted ciphertext %h', debugKey, ciphertext)
+        this.queue(ciphertext)
+      }
     },
     function encryptThroughEnd() {
-      const final = encrypter.final()
+      // send a block full of zeros with the final marker
+      const finalBlock = Buffer.alloc(plaintextBlockSize)
+      sodium_pad(finalBlock, 0, plaintextBlockSize)
+      const final = encrypter.final(finalBlock, Buffer.allocUnsafe(plaintextBlockSize + ABYTES))
       debug('%h : encrypter final %h', debugKey, final)
       this.queue(final)
       this.queue(null)
@@ -60,13 +95,15 @@ function createEncryptStream(key) {
   }
 }
 
-function createDecryptStream(key) {
+function createDecryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
   if (key.length !== KEYBYTES) {
     throw new Error(`pull-secretstream/createDecryptStream: key must be byte length of ${KEYBYTES}`)
   }
-  const debugKey = key.slice(0, 2)
 
+  const debugKey = key.slice(0, 2)
   const decrypter = new Pull(key)
+  const plaintextBlockSize = getPlaintextBlockSize(ciphertextBlockSize)
+  const ciphertextBufferList = new BufferList()
 
   const receiveHeader = pullHeader(HEADERBYTES, (header) => {
     debug('%h : decrypter receiving header %h', debugKey, header)
@@ -75,13 +112,29 @@ function createDecryptStream(key) {
 
   const decryptMap = pullThrough(
     function decryptThroughData(ciphertext) {
-      debug('%h : decrypting ciphertext %h', debugKey, ciphertext)
-      const plaintext = decrypter.next(ciphertext)
-      debug('%h : decrypted ciphertext %h', debugKey, plaintext)
-      this.queue(plaintext)
-      if (decrypter.final) {
-        debug('%h : decrypter final', debugKey)
-        this.emit('end')
+      ciphertextBufferList.append(ciphertext)
+
+      // while we still have enough bytes for full blocks
+      while (ciphertextBufferList.length >= ciphertextBlockSize) {
+        const ciphertextBlock = ciphertextBufferList.slice(0, ciphertextBlockSize)
+        ciphertextBufferList.consume(ciphertextBlockSize)
+        debug('%h : decrypting block %h', debugKey, ciphertextBlock)
+        const plaintextBlock = decrypter.next(ciphertextBlock)
+        debug('%h : decrypted plaintext %h', debugKey, plaintextBlock)
+        const plaintextLength = sodium_unpad(
+          plaintextBlock,
+          plaintextBlock.length,
+          plaintextBlockSize,
+        )
+        const plaintext = plaintextBlock.slice(0, plaintextLength)
+        debug('%h : unpadded plaintext %h', debugKey, plaintext)
+        this.queue(plaintext)
+
+        if (decrypter.final) {
+          debug('%h : decrypter final', debugKey)
+          this.emit('end')
+          break
+        }
       }
     },
     function decryptThroughEnd() {
