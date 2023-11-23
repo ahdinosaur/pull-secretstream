@@ -65,10 +65,11 @@ function createEncryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
       }
 
       if (plaintextBufferList.length > 0) {
+        const plaintextLength = plaintextBufferList.length
         const plaintextBlock = Buffer.alloc(plaintextBlockSize)
-        plaintextBufferList.copy(plaintextBlock, 0, 0, plaintextBufferList.length)
-        plaintextBufferList.consume(plaintextBufferList.length)
-        sodium_pad(plaintextBlock, plaintextBufferList.length, plaintextBlockSize)
+        plaintextBufferList.copy(plaintextBlock, 0, 0, plaintextLength)
+        plaintextBufferList.consume(plaintextLength)
+        sodium_pad(plaintextBlock, plaintextLength, plaintextBlockSize)
         debug('%h : encrypting padded block %h', debugKey, plaintextBlock)
         const ciphertext = encrypter.next(plaintextBlock)
         debug('%h : encrypted ciphertext %h', debugKey, ciphertext)
@@ -76,7 +77,9 @@ function createEncryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
       }
     },
     function encryptThroughEnd() {
-      const final = encrypter.final()
+      const finalBlock = Buffer.alloc(plaintextBlockSize)
+      sodium_pad(finalBlock, 0, plaintextBlockSize)
+      const final = encrypter.final(finalBlock, Buffer.allocUnsafe(plaintextBlockSize + ABYTES))
       debug('%h : encrypter final %h', debugKey, final)
       this.queue(final)
       this.queue(null)
@@ -118,7 +121,7 @@ function createDecryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
           plaintextBlock.length,
           plaintextBlockSize,
         )
-        const plaintext = plaintext.slice(0, plaintextLength)
+        const plaintext = plaintextBlock.slice(0, plaintextLength)
         debug('%h : unpadded plaintext %h', debugKey, plaintext)
         this.queue(plaintext)
 
@@ -130,12 +133,14 @@ function createDecryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
       }
     },
     function decryptThroughEnd() {
+      /*
       if (!decrypter.final) {
         this.emit(
           'error',
           new Error('pull-secretstream/decryptStream: stream ended before final tag'),
         )
       }
+      */
       // otherwise the stream should have already been ended.
     },
   )
