@@ -1,6 +1,6 @@
 {
   "name": "pull-secretstream",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "libsodium secretstream as a pull stream",
   "main": "src/index.js",
   "scripts": {
