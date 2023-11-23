@@ -27,6 +27,7 @@
   },
   "homepage": "https://github.com/ahdinosaur/pull-secretstream#readme",
   "dependencies": {
+    "bl": "^6.0.8",
     "debug": "^4.3.4",
     "pull-cat": "^1.1.11",
     "pull-header": "^0.0.0",
@@ -34,6 +35,7 @@
     "pull-reader": "^1.3.1",
     "pull-stream": "^3.7.0",
     "pull-through": "^1.0.18",
-    "sodium-secretstream": "^1.1.0"
+    "sodium-secretstream": "^1.1.0",
+    "sodium-universal": "^4.0.0"
   }
 }
