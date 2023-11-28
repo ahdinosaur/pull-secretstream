@@ -8,6 +8,7 @@ const createDebug = require('debug')
 const { sodium_pad, sodium_unpad } = require('sodium-universal')
 
 const DEFAULT_BLOCK_SIZE = 512 // bytes
+const MINIMUM_PADDING = 1 // bytes
 
 createDebug.formatters.h = (v) => {
   return v.toString('hex')
@@ -18,6 +19,7 @@ const debug = createDebug('pull-secretstream')
 module.exports = {
   KEY_SIZE: KEYBYTES,
   DEFAULT_BLOCK_SIZE,
+  MINIMUM_PADDING,
   createEncryptStream,
   createDecryptStream,
   getPlaintextBlockSize,
@@ -57,9 +59,11 @@ function createEncryptStream(key, ciphertextBlockSize = DEFAULT_BLOCK_SIZE) {
       plaintextBufferList.append(plaintext)
 
       // while we still have enough bytes to send full blocks
-      while (plaintextBufferList.length >= plaintextBlockSize) {
-        const plaintextBlock = plaintextBufferList.slice(0, plaintextBlockSize)
-        plaintextBufferList.consume(plaintextBlockSize)
+      while (plaintextBufferList.length >= plaintextBlockSize - MINIMUM_PADDING) {
+        const plaintextBlock = Buffer.alloc(plaintextBlockSize)
+        plaintextBufferList.copy(plaintextBlock, 0, 0, plaintextBlockSize - MINIMUM_PADDING)
+        plaintextBufferList.consume(plaintextBlockSize - MINIMUM_PADDING)
+        sodium_pad(plaintextBlock, plaintextBlockSize - MINIMUM_PADDING, plaintextBlockSize)
         debug('%h : encrypting block %h', debugKey, plaintextBlock)
         const ciphertext = encrypter.next(plaintextBlock)
         debug('%h : encrypted ciphertext %h', debugKey, ciphertext)
