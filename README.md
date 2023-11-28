@@ -66,3 +66,7 @@ Returns a "through" pull-stream that:
 ### `getPlaintextBlockSize(ciphertextBlockSize)`
 
 `cipherBlockSize` - 17 bytes (secretstream's additional data)
+
+### `MINIMUM_PADDING`
+
+1 byte: the minimum amount of space needed for padding in each plaintext block.
